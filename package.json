@@ -1,0 +1,9 @@
+{
+  "description": "IQ Puzzler PRO - Solution Generator",
+  "dependencies": {
+    "clone-deep": "latest",
+    "cli-color": "latest"
+  },
+  "devDependencies": {},
+  "scripts": {}
+}

@@ -9,8 +9,8 @@ Print possible pieces' orientations
 
     node print-pieces.js
 
-Print specific challenge
+Print all challenges & solutions
 
-    node print-challenge.js [number]
+    node print-challenges.js
 
 

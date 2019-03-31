@@ -3,13 +3,17 @@ const Challenges = require("./challenges");
 const Solution = require("./solution");
 const Print = require("./print");
 
-const field = Solution.createField(11, 5);
+const field = Solution.createField(23, Challenges.length * 6 - 1);
 
-const challenge = Challenges[0];
-
-challenge.forEach((challenge) => {
-    Solution.putIf(field, Pieces[challenge.id].shapes[challenge.orientation],
-        challenge.x, challenge.y, challenge.id);
+Challenges.forEach((challenge, i) => {
+    challenge.forEach((challengePiece) => {
+        if (!challengePiece.isSolution) {
+            Solution.putIf(field, Pieces[challengePiece.id].shapes[challengePiece.orientation],
+                challengePiece.x, i * 5 + challengePiece.y, challengePiece.id);
+        }
+        Solution.putIf(field, Pieces[challengePiece.id].shapes[challengePiece.orientation],
+            challengePiece.x + 12, i * 5 + challengePiece.y, challengePiece.id);
+    });
 });
 
 // for (let i in challenge.solution)

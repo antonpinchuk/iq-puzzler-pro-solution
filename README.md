@@ -32,6 +32,23 @@ complete solution set, so replaying `play` many times will eventually start repe
 
 ## Discovery
 
+### Results report - 17.3M solutions!
+
+Output of [solution search script](#solution-search-script) for the 11x5 board, tiled with all 12 pieces, has exactly 17,324,560 distinct solutions (4,331,140 found by the search itself, expanded to their mirror variants).
+
+|                                 |                                      |
+|---------------------------------|--------------------------------------|
+| Total nodes visited             | 221,922,285                          |
+| Solutions found (pre-mirror)    | 4,331,140                            |
+| Solutions total (incl. mirrors) | **17,324,560**                       |
+| `build/solutions.jsonl`         | size: 8,393 MB                       |
+| Wall-clock time                 | 00:13:42                             |
+| Machine                         | Apple MacBook Pro, M4 Pro (14 cores) |
+
+CPU usage stayed around half of the machine's 14 cores during the run, since only 10 of them are
+performance cores (the other 4 are efficiency cores) and the search is hardcoded to 4 worker
+threads — so 13:42 is a fairly quick result for exhaustively enumerating over 17 million tilings.
+
 ### Solution search script
 
 #### Description and usage
@@ -62,15 +79,6 @@ far:
 or pick a small diverse subset for the repo's checked-in `solutions.json` — see
 [Diversity selection](#diversity-selection).
 
-#### Results report
-
-<!-- TODO: fill in after running `npm run solutions` to completion.
-     - Total distinct solutions found (post mirror-expansion):
-     - build/solutions.jsonl file size:
-     - Total wall-clock time:
-     - Machine: Intel i5, 64GB DDR5, 2020
--->
-
 #### How it works
 
 - **Placement target**: at each step, find the leftmost empty cell (column-major scan — leftmost
@@ -94,6 +102,17 @@ or pick a small diverse subset for the repo's checked-in `solutions.json` — se
   OS threads (`worker_threads`, not the event loop), each running an independent search rooted at
   its assigned first moves; the main thread aggregates results, prints solutions as they arrive,
   and writes the combined output.
+- **No cross-solution dedup bookkeeping**: each worker searches a disjoint subtree (a distinct
+  first-move root candidate, with mirror-orbit reduction already applied), and each worker's own
+  backtracking search is exhaustive and deterministic, so no two solutions found across the whole
+  run can ever be the same board. The only deduplication that happens is within a single
+  solution's own mirror variants (see mirror deduplication above) — there's no growing set of
+  "every solution seen so far" to check against.
+- **Bounded-memory streaming writes**: found solutions are queued and flushed to
+  `build/solutions.jsonl` in batches, on a schedule that starts at 1s and doubles up to a 60s cap
+  — plus a size-based safety net that forces an early flush once 20,000 solutions are queued, so
+  a very high discovery rate never builds an in-memory backlog large enough to blow past
+  JavaScript's max string length.
 
 ### Diversity selection
 

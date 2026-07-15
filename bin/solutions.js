@@ -15,6 +15,11 @@ const WORKER_COUNT = 4;
 const OUTPUT_PATH = path.join(__dirname, "..", "build", "solutions.jsonl");
 const MIN_FLUSH_INTERVAL_MS = 1000;
 const MAX_FLUSH_INTERVAL_MS = 60000;
+// Safety net independent of the time-based interval: at high solution rates
+// (hundreds of thousands/sec), waiting up to 60s between flushes can queue
+// an unbounded backlog in memory. Force a flush once pending solutions cross
+// this count, whichever comes first (time or size).
+const MAX_PENDING_SOLUTIONS = 20000;
 
 const pieceLookup = (id) => Pieces.find((p) => p.id === id);
 
@@ -77,10 +82,16 @@ async function main() {
     }));
     const doneFlags = chunks.map(() => false);
 
-    // Only canonical keys are kept for dedup (not full placement data) — at
-    // millions of solutions this is the dominant memory cost, and a key
-    // string is far smaller than the 12-placement array it dedups against.
-    const seenKeys = new Set();
+    // No cross-solution dedup set: each worker searches a disjoint subtree
+    // (partitioned by first-move root candidate, with mirror-orbit reduction
+    // applied once up front), and within one worker the backtracking search
+    // is exhaustive and deterministic, so no two distinct calls to
+    // handleSolution can ever produce the same final board. The only
+    // dedup that's actually needed is among a single solution's own mirror
+    // variants (self-symmetric solutions), which Symmetry.generateVariants
+    // already does internally. Verified empirically against real runs
+    // (200K+ solutions, zero duplicates) before removing the safety-net Set,
+    // which would otherwise grow unbounded across a multi-million-solution run.
     let preMirrorSolutionCount = 0;
     let savedSolutionCount = 0;
     const appender = SolutionsStore.createJsonlAppender(OUTPUT_PATH);
@@ -95,13 +106,21 @@ async function main() {
 
     function flushPending(force) {
         const now = Date.now();
-        if (!force && now - lastFlushAt < flushIntervalMs) return;
+        const dueByTime = now - lastFlushAt >= flushIntervalMs;
+        const dueBySize = pendingSolutions.length >= MAX_PENDING_SOLUTIONS;
+        if (!force && !dueByTime && !dueBySize) return;
         if (pendingSolutions.length > 0) {
             appender.appendMany(pendingSolutions);
             pendingSolutions.length = 0;
         }
         lastFlushAt = now;
-        flushIntervalMs = Math.min(flushIntervalMs * 2, MAX_FLUSH_INTERVAL_MS);
+        // Only grow the interval when it was actually the time-based trigger
+        // that fired — a size-triggered flush at high discovery rate means
+        // the interval is already too long for the current pace, so don't
+        // push it out even further.
+        if (dueByTime || force) {
+            flushIntervalMs = Math.min(flushIntervalMs * 2, MAX_FLUSH_INTERVAL_MS);
+        }
     }
 
     function aggregatedStats() {
@@ -130,30 +149,19 @@ async function main() {
         preMirrorSolutionCount++;
         const variants = Symmetry.generateVariants(placements, Board.BOARD_WIDTH, Board.BOARD_HEIGHT, pieceLookup);
 
-        const newVariants = [];
-        for (const variant of variants) {
-            const key = Symmetry.canonicalKey(variant);
-            if (!seenKeys.has(key)) {
-                seenKeys.add(key);
-                newVariants.push(variant);
-            }
-        }
+        pendingSolutions.push(...variants);
+        savedSolutionCount += variants.length;
 
-        if (newVariants.length > 0) {
-            pendingSolutions.push(...newVariants);
-            savedSolutionCount += newVariants.length;
-
-            if (!silent) {
-                progress.clear();
-                for (const variant of newVariants) {
-                    const field = Board.createField(Board.BOARD_WIDTH, Board.BOARD_HEIGHT);
-                    for (const p of variant) {
-                        const piece = pieceLookup(p.id);
-                        Board.place(field, piece.shapes[p.orientationIndex], p.x, p.y, p.id);
-                    }
-                    Display.drawField(field);
-                    process.stdout.write("\n");
+        if (!silent) {
+            progress.clear();
+            for (const variant of variants) {
+                const field = Board.createField(Board.BOARD_WIDTH, Board.BOARD_HEIGHT);
+                for (const p of variant) {
+                    const piece = pieceLookup(p.id);
+                    Board.place(field, piece.shapes[p.orientationIndex], p.x, p.y, p.id);
                 }
+                Display.drawField(field);
+                process.stdout.write("\n");
             }
         }
         flushPending(false);

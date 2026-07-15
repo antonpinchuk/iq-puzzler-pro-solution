@@ -16,7 +16,7 @@ function parseCliArgs() {
     const { values } = parseArgs({
         options: {
             speed: { type: "string", default: "200" },
-            pieces: { type: "string", default: "9" },
+            pieces: { type: "string", default: "6" },
             verbose: { type: "boolean", default: false },
         },
     });

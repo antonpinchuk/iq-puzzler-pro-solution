@@ -16,13 +16,13 @@ Play: generates a random solvable challenge, press SPACE to watch the solver fil
 step by step, using a recursive backtracking search (leftmost-empty-cell targeting + flood-fill
 region pruning), the same engine used by the solution search script below.
 
-    npm run play -- --speed 200 --pieces 9
+    npm run play -- --speed 200 --pieces 6
     npm start
 
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--speed` | `200` | Delay in ms between visualized steps. `0` disables the delay (still shows every step, just back-to-back). |
-| `--pieces` | `9` | How many pieces to pre-place as the starting challenge, `0`-`12`. `0` means solve the whole board from scratch; `12` means the board is already complete. |
+| `--pieces` | `6` | How many pieces to pre-place as the starting challenge, `0`-`12`. `0` means solve the whole board from scratch; `12` means the board is already complete. |
 | `--verbose` | off | Also visualize every candidate orientation/position the solver tries and rejects, not just successful placements and backtracks. |
 
 `play` picks a random starting challenge from the repo's `solutions.json`. That file currently

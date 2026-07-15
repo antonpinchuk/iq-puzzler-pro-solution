@@ -1,9 +1,15 @@
 {
   "description": "IQ Puzzler PRO - Solution Generator",
+  "scripts": {
+    "solutions": "node bin/solutions.js",
+    "select-diverse": "node bin/select-diverse.js",
+    "play": "node bin/play.js",
+    "start": "node bin/play.js",
+    "pieces": "node bin/pieces.js"
+  },
   "dependencies": {
     "clone-deep": "latest",
     "cli-color": "latest"
   },
-  "devDependencies": {},
-  "scripts": {}
+  "devDependencies": {}
 }

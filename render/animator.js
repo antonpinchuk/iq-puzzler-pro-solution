@@ -1,7 +1,35 @@
 const Display = require("./console-display.js");
+const Pieces = require("../lib/pieces.js");
+
+const pieceLookup = (id) => Pieces.find((p) => p.id === id);
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Events that represent a candidate placement decision (as opposed to a
+// state that's already committed to the real field) get a preview overlay:
+// the candidate's shape is stamped onto a cloned field with a sentinel value
+// so it renders in a distinct "trying this" color, without touching the
+// solver's actual field. Out-of-bounds/overlapping cells are silently
+// skipped in the overlay (canPlace already failed for those — the preview
+// just shows where the piece would sit, collisions and all).
+const PREVIEW_EVENT_TYPES = new Set(["attempt", "reject-collision", "reject-pruned"]);
+
+function withCandidatePreview(field, event) {
+    const piece = pieceLookup(event.pieceId);
+    const shape = piece.shapes[event.orientationIndex];
+    const preview = field.map((row) => row.slice());
+    for (let i = 0; i < shape.length; i++) {
+        for (let j = 0; j < shape[i].length; j++) {
+            if (!shape[i][j]) continue;
+            const y = event.y + i;
+            const x = event.x + j;
+            if (y < 0 || y >= preview.length || x < 0 || x >= preview[0].length) continue;
+            if (preview[y][x] === -1) preview[y][x] = Display.PREVIEW_CELL_VALUE;
+        }
+    }
+    return preview;
 }
 
 const EVENT_LABELS = {
@@ -51,7 +79,10 @@ function makeStepHandler({ speed, startedAt, boardHeight, verbose = false }) {
 
         const frameStart = Date.now();
 
-        renderer.render(event.field);
+        const fieldToRender = PREVIEW_EVENT_TYPES.has(event.type)
+            ? withCandidatePreview(event.field, event)
+            : event.field;
+        renderer.render(fieldToRender);
 
         const elapsedMs = Date.now() - startedAt;
         const label = EVENT_LABELS[event.type] || event.type;

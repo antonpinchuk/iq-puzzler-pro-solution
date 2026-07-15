@@ -3,12 +3,17 @@ const clc = require("cli-color");
 const Pieces = require("../lib/pieces.js");
 
 const EMPTY_CELL = { clrCode: 7 };
+// Sentinel cell value (below -1, which already means "empty") for previewing
+// a candidate piece placement without actually mutating the real field —
+// lets the `--verbose` animator show "trying to fit here" attempts.
+const PREVIEW_CELL_VALUE = -2;
+const PREVIEW_CELL = { clrCode: 244 };
 const CELL_TEXT = " ○ ";
 const CELL_WIDTH = CELL_TEXT.length;
 
 function cellText(field, x, y) {
     const cellPiece = field[y][x];
-    const cell = cellPiece >= 0 ? Pieces[cellPiece] : EMPTY_CELL;
+    const cell = cellPiece === PREVIEW_CELL_VALUE ? PREVIEW_CELL : cellPiece >= 0 ? Pieces[cellPiece] : EMPTY_CELL;
     return clc.bgXterm(cell.clrCode)(CELL_TEXT);
 }
 
@@ -89,4 +94,5 @@ module.exports = {
     showCursor,
     createFieldRenderer,
     CELL_WIDTH,
+    PREVIEW_CELL_VALUE,
 };

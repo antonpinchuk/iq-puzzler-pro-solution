@@ -152,7 +152,10 @@ Print every orientation (rotations/flips) of every piece:
 
     npm run pieces
 
-View a range of solutions from a `.jsonl` file produced by `npm run solutions` (defaults to
-0-based index `0`, count `10`):
+View solutions from either a `.jsonl` file (streamed line-by-line, e.g. `build/solutions.jsonl`)
+or a `.json` file (loaded directly, e.g. the repo's `solutions.json`) — same console output
+either way. `startIndex` and `count` are both optional; omit either (or both) to print everything
+from index `0` through the end of the file:
 
     node bin/view-solutions.js build/solutions.jsonl [startIndex] [count]
+    node bin/view-solutions.js solutions.json [startIndex] [count]

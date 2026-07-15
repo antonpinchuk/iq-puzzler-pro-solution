@@ -1,4 +1,5 @@
 const path = require("path");
+const { parseArgs } = require("node:util");
 const { Worker } = require("worker_threads");
 
 const Board = require("../lib/board.js");
@@ -11,9 +12,20 @@ const ProgressLine = require("../render/progress-line.js");
 const Format = require("../render/format.js");
 
 const WORKER_COUNT = 4;
-const OUTPUT_PATH = path.join(__dirname, "..", "build", "solutions.json");
+const OUTPUT_PATH = path.join(__dirname, "..", "build", "solutions.jsonl");
+const MIN_FLUSH_INTERVAL_MS = 1000;
+const MAX_FLUSH_INTERVAL_MS = 60000;
 
 const pieceLookup = (id) => Pieces.find((p) => p.id === id);
+
+function parseCliArgs() {
+    const { values } = parseArgs({
+        options: {
+            silent: { type: "boolean", default: false },
+        },
+    });
+    return { silent: values.silent };
+}
 
 function computeRootCandidates() {
     const all = Solver.computeCornerCandidates(Pieces, Board.BOARD_WIDTH, Board.BOARD_HEIGHT);
@@ -43,11 +55,18 @@ function formatDuration(ms) {
 }
 
 async function main() {
+    const { silent } = parseCliArgs();
     const startedAt = Date.now();
     const rootCandidates = computeRootCandidates();
 
     console.log(`Board ${Board.BOARD_WIDTH}x${Board.BOARD_HEIGHT}, ${Pieces.length} pieces.`);
-    console.log(`Root candidates after mirror-dedup: ${rootCandidates.length} (searching with ${WORKER_COUNT} worker threads)\n`);
+    console.log(`Root candidates after mirror-dedup: ${rootCandidates.length} (searching with ${WORKER_COUNT} worker threads)`);
+    console.log(`Solutions saved to: ${OUTPUT_PATH}`);
+    if (silent) {
+        console.log("--silent: board canvases suppressed. View a range later with:");
+        console.log(`  node bin/view-solutions.js ${OUTPUT_PATH} <start> [count]`);
+    }
+    console.log("");
 
     const chunks = partitionRoundRobin(rootCandidates, WORKER_COUNT);
 
@@ -58,19 +77,31 @@ async function main() {
     }));
     const doneFlags = chunks.map(() => false);
 
-    const solutionsByKey = new Map();
+    // Only canonical keys are kept for dedup (not full placement data) — at
+    // millions of solutions this is the dominant memory cost, and a key
+    // string is far smaller than the 12-placement array it dedups against.
+    const seenKeys = new Set();
     let preMirrorSolutionCount = 0;
-    let lastDumpAt = Date.now();
-    let dirtySinceLastDump = false;
-    const DUMP_INTERVAL_MS = 30000;
+    let savedSolutionCount = 0;
+    const appender = SolutionsStore.createJsonlAppender(OUTPUT_PATH);
+    const pendingSolutions = [];
 
-    function dumpIncremental(force) {
-        if (!dirtySinceLastDump) return;
+    // Flush interval doubles after each flush (1s, 2s, 4s, ... capped at 60s):
+    // frequent early flushes so an early interrupt doesn't lose much, rare
+    // late flushes once the run is clearly going to be long so flushing
+    // itself doesn't become per-node overhead.
+    let flushIntervalMs = MIN_FLUSH_INTERVAL_MS;
+    let lastFlushAt = Date.now();
+
+    function flushPending(force) {
         const now = Date.now();
-        if (!force && now - lastDumpAt < DUMP_INTERVAL_MS) return;
-        SolutionsStore.write(OUTPUT_PATH, Array.from(solutionsByKey.values()));
-        lastDumpAt = now;
-        dirtySinceLastDump = false;
+        if (!force && now - lastFlushAt < flushIntervalMs) return;
+        if (pendingSolutions.length > 0) {
+            appender.appendMany(pendingSolutions);
+            pendingSolutions.length = 0;
+        }
+        lastFlushAt = now;
+        flushIntervalMs = Math.min(flushIntervalMs * 2, MAX_FLUSH_INTERVAL_MS);
     }
 
     function aggregatedStats() {
@@ -91,7 +122,7 @@ async function main() {
         const elapsedMs = Date.now() - startedAt;
         const nodesPerSec = elapsedMs > 0 ? Math.round((agg.nodesVisited / elapsedMs) * 1000) : 0;
         progress.update(
-            `nodes=${agg.nodesVisited} solutions=${preMirrorSolutionCount} elapsed=${formatDuration(elapsedMs)} speed=${nodesPerSec} nodes/s`
+            `nodes=${agg.nodesVisited} solutions=${preMirrorSolutionCount} saved=${savedSolutionCount} elapsed=${formatDuration(elapsedMs)} speed=${nodesPerSec} nodes/s`
         );
     }
 
@@ -102,26 +133,30 @@ async function main() {
         const newVariants = [];
         for (const variant of variants) {
             const key = Symmetry.canonicalKey(variant);
-            if (!solutionsByKey.has(key)) {
-                solutionsByKey.set(key, variant);
+            if (!seenKeys.has(key)) {
+                seenKeys.add(key);
                 newVariants.push(variant);
             }
         }
 
         if (newVariants.length > 0) {
-            dirtySinceLastDump = true;
-            progress.clear();
-            for (const variant of newVariants) {
-                const field = Board.createField(Board.BOARD_WIDTH, Board.BOARD_HEIGHT);
-                for (const p of variant) {
-                    const piece = pieceLookup(p.id);
-                    Board.place(field, piece.shapes[p.orientationIndex], p.x, p.y, p.id);
+            pendingSolutions.push(...newVariants);
+            savedSolutionCount += newVariants.length;
+
+            if (!silent) {
+                progress.clear();
+                for (const variant of newVariants) {
+                    const field = Board.createField(Board.BOARD_WIDTH, Board.BOARD_HEIGHT);
+                    for (const p of variant) {
+                        const piece = pieceLookup(p.id);
+                        Board.place(field, piece.shapes[p.orientationIndex], p.x, p.y, p.id);
+                    }
+                    Display.drawField(field);
+                    process.stdout.write("\n");
                 }
-                Display.drawField(field);
-                process.stdout.write("\n");
             }
         }
-        dumpIncremental(false);
+        flushPending(false);
         renderProgress();
     }
 
@@ -129,13 +164,13 @@ async function main() {
 
     function reportInterrupted() {
         progress.newlineAfter();
-        dirtySinceLastDump = true;
-        dumpIncremental(true);
+        flushPending(true);
+        appender.close();
         const agg = aggregatedStats();
         console.log("\nInterrupted. Partial results saved so far:");
         console.log(`Total nodes visited:         ${agg.nodesVisited}`);
         console.log(`Solutions found (pre-mirror): ${preMirrorSolutionCount}`);
-        console.log(`Solutions saved (post-mirror): ${solutionsByKey.size}`);
+        console.log(`Solutions saved (post-mirror): ${savedSolutionCount}`);
         console.log(`Written to:                   ${OUTPUT_PATH}`);
         for (const worker of workers) worker.terminate();
         process.exit(0);
@@ -170,9 +205,8 @@ async function main() {
 
     progress.newlineAfter();
 
-    dirtySinceLastDump = true;
-    dumpIncremental(true);
-    const allSolutions = Array.from(solutionsByKey.values());
+    flushPending(true);
+    appender.close();
 
     const agg = aggregatedStats();
     const elapsedMs = Date.now() - startedAt;
@@ -180,7 +214,7 @@ async function main() {
     console.log("\nSearch complete.");
     console.log(`Total nodes visited:         ${agg.nodesVisited}`);
     console.log(`Solutions found (pre-mirror): ${preMirrorSolutionCount}`);
-    console.log(`Solutions saved (post-mirror): ${allSolutions.length}`);
+    console.log(`Solutions saved (post-mirror): ${savedSolutionCount}`);
     console.log(`Elapsed wall time:            ${formatDuration(elapsedMs)}`);
     console.log(`Written to:                   ${OUTPUT_PATH}`);
 }

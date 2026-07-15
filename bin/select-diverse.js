@@ -1,26 +1,27 @@
 // Standalone post-processing tool: run AFTER `npm run solutions` has produced
-// a full build/solutions.json (potentially millions of entries). Selects a
+// a full build/solutions.jsonl (potentially millions of entries). Selects a
 // small, visually diverse subset for the repo's checked-in solutions.json,
 // since committing the entire solution set is impractical.
 //
 // Usage: node bin/select-diverse.js [inputPath] [outputPath] [selectCount]
-//   inputPath   defaults to build/solutions.json
+//   inputPath   defaults to build/solutions.jsonl
 //   outputPath  defaults to solutions.json (repo root)
 //   selectCount defaults to 128
 //
 // Algorithm:
-//   1. Randomly downsample the full set to SAMPLE_SIZE candidates (exact
-//      greedy farthest-point selection is O(n^2) comparisons, impractical
-//      directly against a multi-million-entry set).
+//   1. Reservoir-sample SAMPLE_SIZE candidates while streaming the (possibly
+//      multi-million-line) .jsonl file, so only SAMPLE_SIZE solutions are
+//      ever held in memory at once regardless of the input file's size.
 //   2. Run greedy farthest-point sampling on that sample to pick SELECT_COUNT
 //      solutions maximizing pairwise diversity: start from a random solution,
 //      repeatedly add whichever remaining candidate has the largest minimum
-//      distance to everything already selected.
+//      distance to everything already selected (exact farthest-point over the
+//      full set would mean comparing every pair — O(n^2) — impractical at
+//      millions of entries, hence the sampling step first).
 //   3. Diversity metric: cell-level Hamming distance between two solutions'
 //      55-cell boards (count of cells where a different piece id occupies
 //      that cell). Cheap, robust, and directly reflects "how different do
-//      these two layouts look on the board" (renamed here as diversity, not
-//      a hard distance metric).
+//      these two layouts look on the board."
 const path = require("path");
 
 const Board = require("../lib/board.js");
@@ -54,13 +55,26 @@ function hammingDistance(a, b) {
     return d;
 }
 
-function shuffleSample(array, sampleSize) {
-    const copy = array.slice();
-    for (let i = copy.length - 1; i > 0 && copy.length - i <= sampleSize; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [copy[i], copy[j]] = [copy[j], copy[i]];
-    }
-    return copy.slice(Math.max(0, copy.length - sampleSize));
+// Classic reservoir sampling (Algorithm R): after seeing n items, the
+// reservoir holds a uniformly random sample of min(n, size) of them, without
+// ever needing to know the total count in advance or hold more than `size`
+// items in memory at once.
+function createReservoir(size) {
+    const items = [];
+    let seen = 0;
+    return {
+        offer(item) {
+            seen++;
+            if (items.length < size) {
+                items.push(item);
+            } else {
+                const j = Math.floor(Math.random() * seen);
+                if (j < size) items[j] = item;
+            }
+        },
+        get items() { return items; },
+        get seenCount() { return seen; },
+    };
 }
 
 function greedyFarthestPoint(flats, count) {
@@ -94,19 +108,21 @@ function greedyFarthestPoint(flats, count) {
     return selectedIdx;
 }
 
-function main() {
-    const inputPath = process.argv[2] || path.join(__dirname, "..", "build", "solutions.json");
+async function main() {
+    const inputPath = process.argv[2] || path.join(__dirname, "..", "build", "solutions.jsonl");
     const outputPath = process.argv[3] || path.join(__dirname, "..", "solutions.json");
     const selectCountArg = parseInt(process.argv[4], 10);
     const targetSelectCount = Number.isFinite(selectCountArg) && selectCountArg > 0 ? selectCountArg : DEFAULT_SELECT_COUNT;
 
     console.log(`Reading ${inputPath} ...`);
-    const store = SolutionsStore.read(inputPath);
-    const total = store.solutions.length;
-    console.log(`Total solutions available: ${total}`);
+    const reservoir = createReservoir(SAMPLE_SIZE);
+    await SolutionsStore.readJsonlSolutions(inputPath, (placements) => {
+        reservoir.offer(placements);
+    });
+    console.log(`Total solutions read: ${reservoir.seenCount}`);
 
-    const sampled = total <= SAMPLE_SIZE ? store.solutions : shuffleSample(store.solutions, SAMPLE_SIZE);
-    console.log(`Downsampled to ${sampled.length} candidates for diversity selection.`);
+    const sampled = reservoir.items;
+    console.log(`Reservoir-sampled ${sampled.length} candidates for diversity selection.`);
 
     const flats = sampled.map((placements) => fieldToFlat(placementsToField(placements)));
 
@@ -121,4 +137,7 @@ function main() {
     console.log(`Wrote ${selected.length} solutions to ${outputPath}`);
 }
 
-main();
+main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+});

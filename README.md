@@ -36,36 +36,49 @@ complete solution set, so replaying `play` many times will eventually start repe
 
 #### Description and usage
 
-Exhaustively finds and prints every distinct tiling of the 11x5 board with all 12 pieces via
-recursive backtracking:
+Exhaustively finds every distinct tiling of the 11x5 board with all 12 pieces via recursive
+backtracking:
 
     npm run solutions
+    npm run solutions -- --silent
 
 This pins all CPU cores for as long as it takes to exhaust the search space across 4 worker
 threads — depending on hardware this can run for hours, so consider whether you want to run it
 on a machine you don't mind tying up. Each solution is printed to the console as soon as it's
-found, and saved to `build/solutions.json` incrementally (roughly every 30s of new results), so
-interrupting the run (Ctrl+C) still leaves a valid, usable partial file rather than losing
-everything.
+found (a long run can print a *lot* — pass `--silent` to suppress the board canvases and keep
+only the self-updating progress line). Solutions are appended to `build/solutions.jsonl` as
+they're found (one JSON array per line — [JSON Lines](https://jsonlines.org/), not a single JSON
+object), flushed to disk on a schedule that starts at every 1s and doubles up to a 60s cap, so an
+early interrupt loses very little and a long run isn't dominated by disk-flush overhead.
+Interrupting the run (Ctrl+C) always does one final flush before exiting, so the file is never
+left mid-write.
 
-`build/solutions.json` is not committed (see `.gitignore`) — the full result set is far too large
-for the repo. After a run finishes (or is interrupted), pick a small diverse subset for the
-repo's checked-in `solutions.json` — see [Diversity selection](#diversity-selection).
+`build/solutions.jsonl` is not committed (see `.gitignore`) — the full result set is far too large
+for the repo. Once a run finishes (or you interrupt it), view any range of what's been found so
+far:
+
+    node bin/view-solutions.js build/solutions.jsonl 0 10
+
+or pick a small diverse subset for the repo's checked-in `solutions.json` — see
+[Diversity selection](#diversity-selection).
 
 #### Results report
 
 <!-- TODO: fill in after running `npm run solutions` to completion.
      - Total distinct solutions found (post mirror-expansion):
-     - build/solutions.json file size:
+     - build/solutions.jsonl file size:
      - Total wall-clock time:
      - Machine: Intel i5, 64GB DDR5, 2020
 -->
 
 #### How it works
 
-- **Placement target**: at each step, find the leftmost-topmost empty cell (row-major scan) and
-  only try candidate pieces/orientations that cover it — this bounds the branching factor and
-  mimics how a person naturally fills a board left-to-right, top-to-bottom.
+- **Placement target**: at each step, find the leftmost empty cell (column-major scan — leftmost
+  column first, top-to-bottom within it) and only try candidate pieces/orientations that cover it.
+  This bounds the branching factor and, importantly, surfaces narrow/tight leftover regions (e.g.
+  a slim strip at the bottom of the board) as the search target much sooner than scanning row by
+  row would, so the solver rejects unfillable placements early instead of discovering the problem
+  only after committing deep into an unrelated part of the board.
 - **Pruning**: after a tentative placement, flood-fill the remaining empty cells into connected
   regions and reject the placement immediately if any region's size can't be reached by any
   combination of remaining pieces, or if no remaining piece/orientation can physically fit inside
@@ -92,11 +105,13 @@ visually varied subset for the checked-in `solutions.json`:
     npm run select-diverse
 
 Usage: `node bin/select-diverse.js [inputPath] [outputPath] [selectCount]` — defaults to reading
-`build/solutions.json`, writing `solutions.json` at the repo root, and selecting 128 solutions.
+`build/solutions.jsonl`, writing `solutions.json` at the repo root, and selecting 128 solutions.
 
 **How it works**: exact farthest-point sampling over the full set would mean comparing every pair
 of solutions (`O(n²)`), impractical at millions of entries. Instead:
-1. Randomly downsample the full set to 10,000 candidates.
+1. Stream the `.jsonl` file and reservoir-sample down to 10,000 candidates — only ever holding
+   10,000 solutions in memory regardless of how large the input file is, and without needing to
+   know the total count up front.
 2. Greedily select the target count from that sample: start from a random solution, then
    repeatedly add whichever remaining candidate has the largest minimum distance to everything
    already selected (farthest-point sampling).
@@ -117,3 +132,8 @@ variety in `play`'s challenges.
 Print every orientation (rotations/flips) of every piece:
 
     npm run pieces
+
+View a range of solutions from a `.jsonl` file produced by `npm run solutions` (defaults to
+0-based index `0`, count `10`):
+
+    node bin/view-solutions.js build/solutions.jsonl [startIndex] [count]
